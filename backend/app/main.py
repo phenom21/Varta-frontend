@@ -5,6 +5,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, status
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
@@ -12,7 +13,7 @@ from dotenv import load_dotenv
 from typing import List
 
 from .database import init_db, get_session
-from .models import User
+from .models import User, Upload
 from .schemas import SignupRequest, LoginRequest, UserRead, Token
 from .auth import (
     get_password_hash,
@@ -52,7 +53,11 @@ def signup(payload: SignupRequest):
         exists = session.execute(stmt).scalar_one_or_none()
         if exists:
             raise HTTPException(status_code=400, detail="Email already exists")
-        user = User(email=norm_email, hashed_password=get_password_hash(payload.password))
+        user = User(
+            email=norm_email,
+            hashed_password=get_password_hash(payload.password),
+            full_name=payload.full_name,
+        )
         session.add(user)
         session.commit()
         session.refresh(user)
@@ -111,6 +116,21 @@ async def upload(file: UploadFile = File(...), user: User = Depends(get_current_
                 break
             out.write(chunk)
 
+    # Persist metadata in DB
+    size = dest_path.stat().st_size
+    with get_session() as session:
+        up = Upload(
+            user_id=user.id,
+            original_name=safe_name,
+            stored_name=dest_name,
+            size=size,
+            content_type=file.content_type,
+            status="completed",
+            duration=None,
+        )
+        session.add(up)
+        session.commit()
+
     return {
         "filename": safe_name,
         "content_type": file.content_type,
@@ -121,19 +141,86 @@ async def upload(file: UploadFile = File(...), user: User = Depends(get_current_
 
 @app.get("/files")
 def list_files(user: User = Depends(get_current_user)):
-    uploads_dir = Path("uploads")
-    uploads_dir.mkdir(exist_ok=True)
-    items = []
-    for p in uploads_dir.iterdir():
-        if not p.is_file():
-            continue
-        # Only list files uploaded by this user for privacy
-        name = p.name
-        parts = name.split("_", 2)
-        if len(parts) >= 2 and parts[0].isdigit() and int(parts[0]) == user.id:
+    # DB-only listing
+    with get_session() as session:
+        rows = session.query(Upload).filter(Upload.user_id == user.id).order_by(Upload.created_at.desc()).all()
+        items = []
+        for r in rows:
             items.append({
-                "name": name,
-                "size": p.stat().st_size,
-                "path": str(p.resolve()),
+                "id": r.stored_name,
+                "name": r.original_name,
+                "size": r.size,
+                "uploaded_at": (r.created_at.isoformat() if getattr(r, "created_at", None) else None),
+                "status": r.status,
+                "duration": r.duration,
             })
-    return {"files": items}
+        return items
+
+
+@app.get("/files/{file_id}")
+def get_file_details(file_id: str, user: User = Depends(get_current_user)):
+    # DB-only details
+    with get_session() as session:
+        row = session.query(Upload).filter(Upload.stored_name == os.path.basename(file_id), Upload.user_id == user.id).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="File not found")
+        original = row.original_name
+        ext = original.rsplit(".", 1)[-1].lower() if "." in original else ""
+        kind = "video" if ext in {"mp4","mov","avi","mkv","webm","m4v","wmv","flv"} else ("image" if ext in {"png","jpg","jpeg","gif","webp","bmp","tiff","svg"} else "file")
+        return {
+            "id": row.stored_name,
+            "name": original,
+            "size": row.size,
+            "uploaded_at": row.created_at.isoformat() if getattr(row, "created_at", None) else None,
+            "status": row.status,
+            "duration": row.duration,
+            "kind": kind,
+        }
+
+
+@app.get("/files/{file_id}/content")
+def get_file_content(file_id: str, user: User = Depends(get_current_user)):
+    """Authenticated streaming of the original uploaded file."""
+    uploads_dir = Path("uploads")
+    p = uploads_dir / os.path.basename(file_id)
+    if not p.exists() or not p.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    parts = p.name.split("_", 2)
+    if len(parts) < 3 or not parts[0].isdigit() or int(parts[0]) != user.id:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    original = parts[2]
+    # Guess media type by extension (best-effort)
+    ext = original.rsplit(".", 1)[-1].lower() if "." in original else ""
+    media = {
+        "mp4": "video/mp4",
+        "webm": "video/webm",
+        "mov": "video/quicktime",
+        "mkv": "video/x-matroska",
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "gif": "image/gif",
+        "webp": "image/webp",
+        "bmp": "image/bmp",
+        "svg": "image/svg+xml",
+    }.get(ext, "application/octet-stream")
+
+    return FileResponse(str(p.resolve()), media_type=media, filename=original)
+
+
+@app.get("/files/{file_id}/download")
+def download_file(file_id: str, user: User = Depends(get_current_user)):
+    """Force download with original filename."""
+    uploads_dir = Path("uploads")
+    p = uploads_dir / os.path.basename(file_id)
+    if not p.exists() or not p.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    parts = p.name.split("_", 2)
+    if len(parts) < 3 or not parts[0].isdigit() or int(parts[0]) != user.id:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    original = parts[2]
+    return FileResponse(str(p.resolve()), media_type="application/octet-stream", filename=original)

@@ -1,65 +1,77 @@
+"use client";
+import { Button } from "@/components/ui/Button";
+import FeatureCard from "@/components/FeatureCard";
+import { MicIcon, WaveSyncIcon, SparkIcon, BoltIcon, GlobeIcon, ShieldIcon } from "@/components/icons";
+import { useAuth } from "@/components/providers/AuthProvider";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 import Image from "next/image";
 
 export default function Home() {
+  const { isAuthed } = useAuth();
+  const router = useRouter();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
+    <main className="bg-black text-white min-h-screen">
+      {/* Hero */}
+      <section className="relative mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 pt-28 pb-16 text-center">
+        <div className="mt-6 mb-6 flex justify-center">
+          <div className="inline-block rounded-lg overflow-hidden bg-black">
             <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+              src="/varta-hero.png"
+              alt="Varta"
+              width={240}
+              height={160}
+              className="block h-14 sm:h-20 w-auto"
+              priority
+              style={{ clipPath: "inset(1.5px round 10px)" }}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+          </div>
         </div>
-      </main>
-    </div>
+        <h1 className="mx-auto max-w-5xl text-5xl sm:text-7xl lg:text-8xl font-extrabold tracking-tight leading-[1.1]">
+          <span className="heading-gradient text-glow-emerald">Transform voices with</span>
+          <br className="hidden sm:block" />
+          <span className="heading-gradient text-glow-emerald">AI precision</span>
+        </h1>
+        <p className="mx-auto mt-5 max-w-2xl text-lg sm:text-xl font-medium leading-relaxed text-white">
+            Varta combines cutting-edge voice cloning and lip sync technology to create perfectly dubbed content in any language
+        </p>
+        <div className="mt-8 flex flex-col sm:flex-row gap-3 justify-center">
+          <Button onClick={() => router.push(isAuthed ? "/files" : "/login")}>Get Started</Button>
+        </div>
+      </section>
+
+      {/* Features */}
+      <section className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 py-8">
+        <h2 className="text-3xl sm:text-4xl font-extrabold text-emerald-400 text-glow-emerald text-center mt-30">Powerful Features</h2>
+        <p className="text-center section-subtitle mt-2">Everything you need for professional voice dubbing</p>
+        <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <FeatureCard title="Voice Cloning" description="Clone any voice with incredible accuracy using advanced AI models" icon={<MicIcon className="h-8 w-8" />} />
+          <FeatureCard title="Lip Sync" description="Perfect lip synchronization for natural-looking dubbed content" icon={<WaveSyncIcon className="h-8 w-8" />} />
+          <FeatureCard title="AI Enhancement" description="Enhance audio quality and remove background noise automatically" icon={<SparkIcon className="h-8 w-8" />} />
+          <FeatureCard title="Fast Processing" description="Get results in minutes, not hours, with our optimized pipeline" icon={<BoltIcon className="h-8 w-8" />} />
+          <FeatureCard title="Multi-Language" description="Support for 50+ languages with natural pronunciation" icon={<GlobeIcon className="h-8 w-8" />} />
+          <FeatureCard title="Secure & Private" description="Your data is encrypted and processed with enterprise-grade security" icon={<ShieldIcon className="h-8 w-8" />} />
+        </div>
+      </section>
+
+      {/* CTA */}
+      <section className="mx-auto max-w-5xl px-4 sm:px-6 lg:px-8 py-12">
+        <div className="rounded-2xl border border-emerald-500/20 bg-zinc-900/50 p-8 text-center shadow-[0_20px_60px_-20px_rgba(16,185,129,0.25)]">
+          <h3 className="text-2xl sm:text-3xl font-extrabold heading-gradient text-glow-emerald">Ready to get started?</h3>
+          <p className="section-subtitle mt-2">Join thousands of creators using Varta for their dubbing needs</p>
+          <div className="mt-6">
+            {!mounted ? (
+              <div className="h-10" />
+            ) : isAuthed ? (
+              <Button className="px-6" variant="secondary" onClick={() => router.push("/upload")}>Go to Upload</Button>
+            ) : (
+              <Button className="px-6" onClick={() => router.push("/signup")}>Create Free Account</Button>
+            )}
+          </div>
+        </div>
+      </section>
+    </main>
   );
 }
