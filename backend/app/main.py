@@ -108,6 +108,13 @@ async def upload(file: UploadFile = File(...), user: User = Depends(get_current_
     dest_name = f"{user.id}_{ts}_{safe_name}"
     dest_path = uploads_dir / dest_name
 
+    # Enforce video-only uploads
+    allowed_exts = {"mp4", "mov", "m4v", "webm", "mkv", "avi", "wmv", "flv"}
+    is_video_ct = (file.content_type or "").startswith("video/")
+    ext = safe_name.rsplit(".", 1)[-1].lower() if "." in safe_name else ""
+    if not (is_video_ct or ext in allowed_exts):
+        raise HTTPException(status_code=400, detail="Only video files are allowed")
+
     # Stream to disk
     with dest_path.open("wb") as out:
         while True:

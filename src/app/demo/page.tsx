@@ -5,6 +5,13 @@ import { Button } from "@/components/ui/Button";
 import { useToast } from "@/components/providers/ToastProvider";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
+const VIDEO_EXTS = ["mp4", "mov", "m4v", "webm", "mkv", "avi", "wmv", "flv"]; // allowed
+function isVideoFile(f: File | null) {
+  if (!f) return false;
+  if (f.type && f.type.startsWith("video/")) return true;
+  const ext = f.name.split(".").pop()?.toLowerCase() || "";
+  return VIDEO_EXTS.includes(ext);
+}
 
 export default function UploadPage() {
   const { notify } = useToast();
@@ -19,7 +26,14 @@ export default function UploadPage() {
     e.preventDefault();
     setIsHover(false);
     const f = e.dataTransfer.files?.[0];
-    if (f) setFile(f);
+    if (f) {
+      if (!isVideoFile(f)) {
+        setError("Please upload a video file.");
+        notify("Only video files are allowed", { variant: "error" });
+        return;
+      }
+      setFile(f);
+    }
   }, []);
 
   const onDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
@@ -33,6 +47,11 @@ export default function UploadPage() {
   async function onUpload() {
     setError("");
     if (!file) return;
+    if (!isVideoFile(file)) {
+      setError("Please upload a video file.");
+      notify("Only video files are allowed", { variant: "error" });
+      return;
+    }
     const token = localStorage.getItem("token");
     if (!token) {
       setError("Please login first to get a token.");
@@ -99,7 +118,18 @@ export default function UploadPage() {
             <input
               type="file"
               ref={fileInputRef}
-              onChange={(e) => setFile(e.target.files?.[0] || null)}
+              accept="video/*"
+              onChange={(e) => {
+                const f = e.target.files?.[0] || null;
+                if (f && !isVideoFile(f)) {
+                  setError("Please upload a video file.");
+                  notify("Only video files are allowed", { variant: "error" });
+                  e.currentTarget.value = "";
+                  setFile(null);
+                  return;
+                }
+                setFile(f);
+              }}
               className="hidden"
             />
           </div>
