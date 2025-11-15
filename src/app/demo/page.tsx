@@ -21,6 +21,7 @@ export default function UploadPage() {
   const [status, setStatus] = useState<"idle" | "uploading" | "success" | "error">("idle");
   const [isHover, setIsHover] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [language, setLanguage] = useState<"en" | "hi">("en");
 
   const onDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -61,6 +62,7 @@ export default function UploadPage() {
       setStatus("uploading");
       const fd = new FormData();
       fd.append("file", file);
+      fd.append("language", language);
       const res = await fetch(`${API_BASE}/upload`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
@@ -70,13 +72,18 @@ export default function UploadPage() {
         const t = await res.text();
         throw new Error(t || "Upload failed");
       }
-      await res.json();
+      const data = await res.json();
       notify("Uploaded successfully", { variant: "success" });
       setStatus("success");
       // Clear file selection from UI after a successful upload
       setFile(null);
-      // Redirect to files listing
-      router.push("/files");
+      // Redirect to per-file status page if available
+      const fid = data?.file_id;
+      if (typeof fid === "string" && fid.length > 0) {
+        router.push(`/files/${encodeURIComponent(fid)}`);
+      } else {
+        router.push("/files");
+      }
     } catch (e: any) {
       setError(e.message || "Upload failed");
       notify(e.message || "Upload failed", { variant: "error" });
@@ -146,6 +153,17 @@ export default function UploadPage() {
               )}
             </div>
             <div className="flex items-center gap-3">
+              <label className="text-sm text-zinc-300 flex items-center gap-2">
+                <span>Language</span>
+                <select
+                  value={language}
+                  onChange={(e) => setLanguage(e.target.value as "en" | "hi")}
+                  className="bg-black border border-zinc-700 rounded-md px-2 py-1 text-white"
+                >
+                  <option value="en">English</option>
+                  <option value="hi">Hindi</option>
+                </select>
+              </label>
               {status === "uploading" && (
                 <span className="text-emerald-400 text-sm">Uploading...</span>
               )}

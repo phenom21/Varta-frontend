@@ -32,12 +32,32 @@ function formatDate(d?: string) {
   }
 }
 
+function formatDurationSec(total?: number | null) {
+  if (typeof total !== "number" || !isFinite(total) || total < 0) return "";
+  const sec = Math.floor(total);
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
 export default function FileDetailsPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const [details, setDetails] = useState<FileDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [txStatus, setTxStatus] = useState<{
+    status: string;
+    progress: number;
+    status_message?: string | null;
+    transcript_txt?: string | null;
+    transcript_json?: string | null;
+    transcript_vtt?: string | null;
+    processing_time_seconds?: number | null;
+  } | null>(null);
 
   useEffect(() => {
     const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
@@ -85,6 +105,93 @@ export default function FileDetailsPage() {
     };
   }, [params.id, router]);
 
+  // Stream transcription status via SSE, fallback to polling if SSE fails
+  useEffect(() => {
+    const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+    if (!token) return;
+    let aborted = false;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+    let ctrl: AbortController | null = null;
+
+    async function startSSE() {
+      try {
+        ctrl = new AbortController();
+        const res = await fetch(`${API_BASE}/status/stream/${encodeURIComponent(params.id)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: ctrl.signal,
+        });
+        if (!res.ok || !res.body) throw new Error("SSE failed");
+        reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (!aborted) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let idx;
+          while ((idx = buffer.indexOf("\n\n")) !== -1) {
+            const chunk = buffer.slice(0, idx).trim();
+            buffer = buffer.slice(idx + 2);
+            if (chunk.startsWith("data:")) {
+              const payload = chunk.slice(5).trim();
+              try {
+                const data = JSON.parse(payload);
+                setTxStatus({
+                  status: data.status,
+                  progress: typeof data.progress === "number" ? data.progress : 0,
+                  status_message: data.status_message,
+                  transcript_txt: data.transcript_txt || null,
+                  transcript_json: data.transcript_json || null,
+                  transcript_vtt: data.transcript_vtt || null,
+                  processing_time_seconds: typeof data.processing_time_seconds === "number" ? data.processing_time_seconds : null,
+                });
+                if (data.status === "transcribed" || data.status === "failed") {
+                  aborted = true;
+                  ctrl?.abort();
+                  break;
+                }
+              } catch {}
+            }
+          }
+        }
+      } catch {
+        // Fallback to polling
+        if (!aborted) {
+          let timer: number | undefined;
+          const poll = async () => {
+            try {
+              const r = await fetch(`${API_BASE}/status/${encodeURIComponent(params.id)}`, {
+                headers: { Authorization: `Bearer ${token}` },
+              });
+              if (r.ok) {
+                const data = await r.json();
+                setTxStatus({
+                  status: data.status,
+                  progress: typeof data.progress === "number" ? data.progress : 0,
+                  status_message: data.status_message,
+                  transcript_txt: data.transcript_txt || null,
+                  transcript_json: data.transcript_json || null,
+                  transcript_vtt: data.transcript_vtt || null,
+                  processing_time_seconds: typeof data.processing_time_seconds === "number" ? data.processing_time_seconds : null,
+                });
+                if (data.status === "transcribed" || data.status === "failed") return;
+              }
+            } catch {}
+            timer = window.setTimeout(poll, 2000);
+          };
+          poll();
+          return () => timer && window.clearTimeout(timer);
+        }
+      }
+    }
+    startSSE();
+    return () => {
+      aborted = true;
+      ctrl?.abort();
+      reader?.releaseLock();
+    };
+  }, [params.id]);
+
   if (loading) return <div className="min-h-screen bg-black text-white pt-28 px-6">Loading...</div>;
   if (!details) return <div className="min-h-screen bg-black text-white pt-28 px-6">File not found.</div>;
 
@@ -105,14 +212,121 @@ export default function FileDetailsPage() {
           </div>
           <span className={
             "inline-flex items-center rounded-full px-3 py-1 text-xs font-medium h-7 " +
-            (details.status === "failed"
+            ((txStatus?.status || details.status) === "failed"
               ? "bg-red-500/10 text-red-300 border border-red-500/30"
-              : details.status === "processing"
+              : (txStatus?.status || details.status) === "processing"
               ? "bg-blue-500/10 text-blue-300 border border-blue-500/30"
               : "bg-emerald-500/10 text-emerald-300 border border-emerald-500/30")
           }>
-            {details.status === "failed" ? "failed" : details.status === "processing" ? "processing" : "completed"}
+            {(txStatus?.status || details.status || "completed").toString()}
           </span>
+        </div>
+
+        {/* Transcription status */}
+        <div className="mt-6 rounded-2xl border border-emerald-500/15 bg-zinc-900/40 p-5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-zinc-200 font-semibold">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 6v12M6 12h12"/></svg>
+              Transcription
+            </div>
+            <div className="text-sm text-zinc-400">
+              {typeof txStatus?.progress === "number" ? `${txStatus.progress}%` : ""}
+            </div>
+          </div>
+          <div className="mt-4 h-2 w-full rounded bg-zinc-800 overflow-hidden">
+            <div
+              className="h-full bg-emerald-500 transition-all"
+              style={{ width: `${Math.min(100, Math.max(0, txStatus?.progress ?? 0))}%` }}
+            />
+          </div>
+          {typeof txStatus?.processing_time_seconds === "number" && (
+            <p className="mt-2 text-xs text-zinc-500">Processing time: {formatDurationSec(txStatus.processing_time_seconds)}</p>
+          )}
+          {txStatus?.status_message && (
+            <p className="mt-3 text-sm text-zinc-400">{txStatus.status_message}</p>
+          )}
+          <div className="mt-4 flex flex-wrap gap-3">
+            <Button
+              disabled={!txStatus?.transcript_txt}
+              onClick={async () => {
+                if (!txStatus?.transcript_txt) return;
+                const token = localStorage.getItem("token");
+                if (!token) return;
+                const res = await fetch(`${API_BASE}${txStatus.transcript_txt}`, { headers: { Authorization: `Bearer ${token}` } });
+                if (!res.ok) return;
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `${details.name}.txt`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+              }}
+            >Download TXT</Button>
+            <Button
+              disabled={!txStatus?.transcript_json}
+              onClick={async () => {
+                if (!txStatus?.transcript_json) return;
+                const token = localStorage.getItem("token");
+                if (!token) return;
+                const res = await fetch(`${API_BASE}${txStatus.transcript_json}`, { headers: { Authorization: `Bearer ${token}` } });
+                if (!res.ok) return;
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `${details.name}.json`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+              }}
+              variant="secondary"
+            >Download JSON</Button>
+            <Button
+              disabled={!txStatus?.transcript_vtt}
+              onClick={async () => {
+                if (!txStatus?.transcript_vtt) return;
+                const token = localStorage.getItem("token");
+                if (!token) return;
+                const res = await fetch(`${API_BASE}${txStatus.transcript_vtt}`, { headers: { Authorization: `Bearer ${token}` } });
+                if (!res.ok) return;
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `${details.name}.vtt`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+              }}
+              variant="secondary"
+            >Download VTT</Button>
+            <Button
+              disabled={!txStatus || (txStatus.status !== "transcribed")}
+              onClick={async () => {
+                const token = localStorage.getItem("token");
+                if (!token) return;
+                const res = await fetch(`${API_BASE}/download/final/${encodeURIComponent(params.id as string)}`, {
+                  headers: { Authorization: `Bearer ${token}` },
+                });
+                if (!res.ok) return;
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `${details.name.replace(/\.[^.]+$/, '')}_final.json`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+              }}
+              variant="secondary"
+            >Download Final JSON</Button>
+          </div>
         </div>
 
         <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
