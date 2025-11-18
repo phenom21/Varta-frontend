@@ -263,7 +263,6 @@ def get_status(file_id: str, user: User = Depends(get_current_user)):
             "processing_time_seconds": (int((tr.updated_at - tr.created_at).total_seconds()) if getattr(tr, "updated_at", None) and getattr(tr, "created_at", None) else None),
             "transcript_txt": f"/download/transcript/{tr.file_id}?fmt=txt" if tr.transcript_local_path else None,
             "transcript_json": f"/download/transcript/{tr.file_id}?fmt=json" if tr.transcript_json_local_path else None,
-            "transcript_vtt": f"/download/transcript/{tr.file_id}?fmt=vtt" if tr.transcript_vtt_local_path else None,
             "timings": timings,
             "total_processing_seconds": (timings.get("total_seconds") if isinstance(timings, dict) else None),
         }
@@ -315,7 +314,6 @@ async def stream_status(file_id: str, user: User = Depends(get_current_user)):
                     "processing_time_seconds": (int((t.updated_at - t.created_at).total_seconds()) if getattr(t, "updated_at", None) and getattr(t, "created_at", None) else None),
                     "transcript_txt": f"/download/transcript/{t.file_id}?fmt=txt" if t.transcript_local_path else None,
                     "transcript_json": f"/download/transcript/{t.file_id}?fmt=json" if t.transcript_json_local_path else None,
-                    "transcript_vtt": f"/download/transcript/{t.file_id}?fmt=vtt" if t.transcript_vtt_local_path else None,
                     "timings": timings,
                     "total_processing_seconds": (timings.get("total_seconds") if isinstance(timings, dict) else None),
                 }
@@ -385,7 +383,6 @@ def download_transcript(file_id: str, fmt: str = "txt", user: User = Depends(get
         path_map = {
             "txt": tr.transcript_local_path,
             "json": tr.transcript_json_local_path,
-            "vtt": tr.transcript_vtt_local_path,
         }
         target = path_map.get(fmt)
         if not target or not Path(target).exists():
@@ -393,7 +390,6 @@ def download_transcript(file_id: str, fmt: str = "txt", user: User = Depends(get
         media = {
             "txt": "text/plain",
             "json": "application/json",
-            "vtt": "text/vtt",
         }.get(fmt, "application/octet-stream")
         return FileResponse(path=target, media_type=media, filename=Path(target).name)
 

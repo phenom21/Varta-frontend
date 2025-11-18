@@ -55,7 +55,6 @@ export default function FileDetailsPage() {
     status_message?: string | null;
     transcript_txt?: string | null;
     transcript_json?: string | null;
-    transcript_vtt?: string | null;
     processing_time_seconds?: number | null;
   } | null>(null);
 
@@ -142,7 +141,6 @@ export default function FileDetailsPage() {
                   status_message: data.status_message,
                   transcript_txt: data.transcript_txt || null,
                   transcript_json: data.transcript_json || null,
-                  transcript_vtt: data.transcript_vtt || null,
                   processing_time_seconds: typeof data.processing_time_seconds === "number" ? data.processing_time_seconds : null,
                 });
                 if (data.status === "transcribed" || data.status === "failed") {
@@ -171,7 +169,6 @@ export default function FileDetailsPage() {
                   status_message: data.status_message,
                   transcript_txt: data.transcript_txt || null,
                   transcript_json: data.transcript_json || null,
-                  transcript_vtt: data.transcript_vtt || null,
                   processing_time_seconds: typeof data.processing_time_seconds === "number" ? data.processing_time_seconds : null,
                 });
                 if (data.status === "transcribed" || data.status === "failed") return;
@@ -285,26 +282,6 @@ export default function FileDetailsPage() {
               }}
               variant="secondary"
             >Download JSON</Button>
-            <Button
-              disabled={!txStatus?.transcript_vtt}
-              onClick={async () => {
-                if (!txStatus?.transcript_vtt) return;
-                const token = localStorage.getItem("token");
-                if (!token) return;
-                const res = await fetch(`${API_BASE}${txStatus.transcript_vtt}`, { headers: { Authorization: `Bearer ${token}` } });
-                if (!res.ok) return;
-                const blob = await res.blob();
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = `${details.name}.vtt`;
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                URL.revokeObjectURL(url);
-              }}
-              variant="secondary"
-            >Download VTT</Button>
             <Button
               disabled={!txStatus || (txStatus.status !== "transcribed")}
               onClick={async () => {
