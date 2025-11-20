@@ -1,6 +1,6 @@
 from datetime import datetime
-from sqlalchemy import UniqueConstraint, String, Integer, DateTime, func
-from sqlalchemy.orm import declarative_base, Mapped, mapped_column
+from sqlalchemy import UniqueConstraint, String, Integer, DateTime, func, JSON, ForeignKey
+from sqlalchemy.orm import declarative_base, Mapped, mapped_column, relationship
 
 
 Base = declarative_base()
@@ -56,3 +56,35 @@ class Upload(Base):
     status: Mapped[str] = mapped_column(String, default="completed", nullable=False)
     duration: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+
+class File(Base):
+    __tablename__ = "files"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
+    s3_original_key: Mapped[str | None] = mapped_column(String, nullable=True)
+    s3_transcript_key: Mapped[str | None] = mapped_column(String, nullable=True)
+    s3_final_key: Mapped[str | None] = mapped_column(String, nullable=True)
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String, default="uploaded", nullable=False)
+    progress: Mapped[dict | list | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    segments: Mapped[list["Segment"]] = relationship("Segment", back_populates="file", cascade="all, delete-orphan")
+
+
+class Segment(Base):
+    __tablename__ = "segments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    file_id: Mapped[str] = mapped_column(String, ForeignKey("files.id"), index=True)
+    speaker_label: Mapped[str] = mapped_column(String)
+    start_ms: Mapped[int] = mapped_column(Integer)
+    end_ms: Mapped[int] = mapped_column(Integer)
+    original_text: Mapped[str | None] = mapped_column(String, nullable=True)
+    translated_text: Mapped[str | None] = mapped_column(String, nullable=True)
+    word_timestamps: Mapped[dict | list | None] = mapped_column(JSON, nullable=True)
+    overlap: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    file: Mapped[File] = relationship("File", back_populates="segments")

@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy and install deps
 COPY backend/requirements.txt /app/backend/requirements.txt
-RUN pip install --no-cache-dir -r /app/backend/requirements.txt
+RUN pip install --default-timeout=100 --no-cache-dir -r /app/backend/requirements.txt
 
 # Copy app code
 COPY backend /app/backend

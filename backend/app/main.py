@@ -16,7 +16,7 @@ import asyncio
 import json
 
 from .database import init_db, get_session
-from .models import User, Upload, Transcription
+from .models import User, Upload, Transcription, File as FileModel, Segment
 from .schemas import SignupRequest, LoginRequest, UserRead, Token
 from .auth import (
     get_password_hash,
@@ -25,7 +25,8 @@ from .auth import (
     get_current_user,
     is_strong_password,
 )
-from .tasks import enqueue_transcription, enqueue_tts_synthesis
+from .tasks import enqueue_transcription, enqueue_tts_synthesis, enqueue_translation
+from pydantic import BaseModel
 from .core.config import MEDIA_ROOT
 
 load_dotenv()
@@ -265,6 +266,7 @@ def get_status(file_id: str, user: User = Depends(get_current_user)):
             "transcript_txt": f"/download/transcript/{tr.file_id}?fmt=txt" if tr.transcript_local_path else None,
             "transcript_json": f"/download/transcript/{tr.file_id}?fmt=json" if tr.transcript_json_local_path else None,
             "timings": timings,
+            "translate": progress.get("translate") if isinstance(progress, dict) else None,
             "total_processing_seconds": (timings.get("total_seconds") if isinstance(timings, dict) else None),
         }
         return JSONResponse(content=data)
@@ -316,6 +318,7 @@ async def stream_status(file_id: str, user: User = Depends(get_current_user)):
                     "transcript_txt": f"/download/transcript/{t.file_id}?fmt=txt" if t.transcript_local_path else None,
                     "transcript_json": f"/download/transcript/{t.file_id}?fmt=json" if t.transcript_json_local_path else None,
                     "timings": timings,
+                    "translate": progress.get("translate") if isinstance(progress, dict) else None,
                     "total_processing_seconds": (timings.get("total_seconds") if isinstance(timings, dict) else None),
                 }
 
@@ -606,3 +609,82 @@ def stream_tts(file_id: str, speaker_label: str, user: User = Depends(get_curren
     if not out_path:
         raise HTTPException(status_code=404, detail="TTS not available yet")
     return FileResponse(str(out_path.resolve()), media_type="audio/wav", filename=f"{speaker_label}_tts_test.wav")
+
+
+class TranslateRequest(BaseModel):
+    target_lang: str
+    force: bool = False
+
+
+@app.post("/files/{file_id}/translate")
+def request_translation(file_id: str, payload: TranslateRequest, user: User = Depends(get_current_user)):
+    file_id = os.path.basename(file_id)
+    with get_session() as session:
+        # Check ownership
+        up = session.query(Upload).filter(Upload.stored_name == file_id, Upload.user_id == user.id).first()
+        if not up:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        # Check status
+        f = session.get(FileModel, file_id)
+        # Allow if diarized, transcribed, or already translated (re-run)
+        if not f or f.status not in {"diarized", "transcribed", "translated", "voices_clone_ready", "error"}:
+             raise HTTPException(status_code=400, detail="File not ready for translation (must be diarized/transcribed)")
+
+        # Update status
+        f.status = "translating"
+        # Initialize progress if needed, or keep existing
+        if not f.progress:
+            f.progress = {}
+        if isinstance(f.progress, dict):
+            f.progress["translate"] = {"status": "queued", "target_lang": payload.target_lang}
+        session.add(f)
+        session.commit()
+
+    job = enqueue_translation(file_id, payload.target_lang, payload.force)
+    return {"file_id": file_id, "job_id": job.id, "status": "queued"}
+
+
+@app.get("/files/{file_id}/segments")
+def list_segments(file_id: str, user: User = Depends(get_current_user)):
+    file_id = os.path.basename(file_id)
+    with get_session() as session:
+        up = session.query(Upload).filter(Upload.stored_name == file_id, Upload.user_id == user.id).first()
+        if not up:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        segments = session.query(Segment).filter(Segment.file_id == file_id).order_by(Segment.start_ms).all()
+        return [
+            {
+                "id": s.id,
+                "start_ms": s.start_ms,
+                "end_ms": s.end_ms,
+                "speaker_label": s.speaker_label,
+                "original_text": s.original_text,
+                "translated_text": s.translated_text,
+            }
+            for s in segments
+        ]
+
+
+class UpdateSegmentRequest(BaseModel):
+    translated_text: str
+
+
+@app.patch("/segments/{segment_id}")
+def update_segment(segment_id: int, payload: UpdateSegmentRequest, user: User = Depends(get_current_user)):
+    with get_session() as session:
+        seg = session.get(Segment, segment_id)
+        if not seg:
+            raise HTTPException(status_code=404, detail="Segment not found")
+        
+        # Verify ownership via file -> upload
+        up = session.query(Upload).filter(Upload.stored_name == seg.file_id, Upload.user_id == user.id).first()
+        if not up:
+            raise HTTPException(status_code=403, detail="Not authorized")
+
+        seg.translated_text = payload.translated_text
+        # TODO: Invalidate TTS if exists (Day 6)
+        session.add(seg)
+        session.commit()
+        return {"id": seg.id, "translated_text": seg.translated_text}

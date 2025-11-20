@@ -70,6 +70,8 @@ export default function FileDetailsPage() {
   >([]);
   const [ttsBusy, setTtsBusy] = useState<Record<string, boolean>>({});
   const [ttsText, setTtsText] = useState<Record<string, string>>({});
+  const [translateBusy, setTranslateBusy] = useState(false);
+  const [targetLang, setTargetLang] = useState("hi");
 
   useEffect(() => {
     const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
@@ -86,7 +88,7 @@ export default function FileDetailsPage() {
           const data = await spRes.json();
           if (Array.isArray(data.speakers)) setSpeakers(data.speakers);
         }
-      } catch {}
+      } catch { }
     }
     async function load() {
       try {
@@ -115,11 +117,11 @@ export default function FileDetailsPage() {
             const url = URL.createObjectURL(blob);
             setPreviewUrl(url);
           }
-        } catch {}
+        } catch { }
         // Fetch speakers for this file
         try {
           await fetchSpeakersOnce();
-        } catch {}
+        } catch { }
       } catch (e) {
         setDetails(null);
       } finally {
@@ -129,7 +131,7 @@ export default function FileDetailsPage() {
     load();
 
     // No polling here; SSE-driven refresh is handled below
-    return () => {};
+    return () => { };
   }, [params.id, router]);
 
   // Refetch speakers when status/progress changes via SSE
@@ -145,7 +147,7 @@ export default function FileDetailsPage() {
           const data = await spRes.json();
           if (Array.isArray(data.speakers)) setSpeakers(data.speakers);
         }
-      } catch {}
+      } catch { }
     })();
   }, [txStatus?.status, txStatus?.progress, params.id]);
 
@@ -197,7 +199,7 @@ export default function FileDetailsPage() {
                   ctrl?.abort();
                   break;
                 }
-              } catch {}
+              } catch { }
             }
           }
         }
@@ -222,7 +224,7 @@ export default function FileDetailsPage() {
                 });
                 if (data.status === "transcribed" || data.status === "failed") return;
               }
-            } catch {}
+            } catch { }
             timer = window.setTimeout(poll, 2000);
           };
           poll();
@@ -241,12 +243,16 @@ export default function FileDetailsPage() {
   if (loading) return <div className="min-h-screen bg-black text-white pt-28 px-6">Loading...</div>;
   if (!details) return <div className="min-h-screen bg-black text-white pt-28 px-6">File not found.</div>;
 
+
+  // ... (existing effects)
+
   return (
     <div className="min-h-screen bg-black text-white">
       <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 pt-24 pb-16">
+        {/* ... (existing header) */}
         <div className="mb-4">
           <Link href="/files" className="text-zinc-400 hover:text-white inline-flex items-center gap-2">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 18l-6-6 6-6"/></svg>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 18l-6-6 6-6" /></svg>
             Back to Files
           </Link>
         </div>
@@ -261,8 +267,8 @@ export default function FileDetailsPage() {
             ((txStatus?.status || details.status) === "failed"
               ? "bg-red-500/10 text-red-300 border border-red-500/30"
               : (txStatus?.status || details.status) === "processing"
-              ? "bg-blue-500/10 text-blue-300 border border-blue-500/30"
-              : "bg-emerald-500/10 text-emerald-300 border border-emerald-500/30")
+                ? "bg-blue-500/10 text-blue-300 border border-blue-500/30"
+                : "bg-emerald-500/10 text-emerald-300 border border-emerald-500/30")
           }>
             {(txStatus?.status || details.status || "completed").toString()}
           </span>
@@ -272,7 +278,7 @@ export default function FileDetailsPage() {
         <div className="mt-6 rounded-2xl border border-emerald-500/15 bg-zinc-900/40 p-5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 text-zinc-200 font-semibold">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 6v12M6 12h12"/></svg>
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 6v12M6 12h12" /></svg>
               Transcription
             </div>
             <div className="text-sm text-zinc-400">
@@ -355,6 +361,84 @@ export default function FileDetailsPage() {
           </div>
         </div>
 
+        {/* Translation Section */}
+        <div className="mt-6 rounded-2xl border border-emerald-500/15 bg-zinc-900/40 p-5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-zinc-200 font-semibold">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 8l6 6M19 6l-7 7-7-7" /></svg>
+              Translation
+            </div>
+            <div className="text-sm text-zinc-400">
+              {(txStatus as any)?.translate?.status ? (
+                <span className="capitalize">{(txStatus as any).translate.status}</span>
+              ) : "Not started"}
+            </div>
+          </div>
+
+          {(txStatus as any)?.translate?.status === "processing" && (
+            <div className="mt-4 h-2 w-full rounded bg-zinc-800 overflow-hidden">
+              <div
+                className="h-full bg-blue-500 transition-all animate-pulse"
+                style={{ width: `${Math.min(100, Math.max(5, ((txStatus as any).translate.translated_segments / (txStatus as any).translate.total_segments) * 100))}%` }}
+              />
+            </div>
+          )}
+
+          <div className="mt-4 flex items-center gap-4">
+            <select
+              className="bg-zinc-950 border border-zinc-800 text-white rounded px-3 py-2 text-sm focus:outline-none focus:border-emerald-500"
+              value={targetLang}
+              onChange={(e) => setTargetLang(e.target.value)}
+              disabled={translateBusy || (txStatus as any)?.translate?.status === "processing"}
+            >
+              <option value="hi">Hindi (IndicTrans2)</option>
+              <option value="bn">Bengali (IndicTrans2)</option>
+              <option value="ta">Tamil (IndicTrans2)</option>
+              <option value="te">Telugu (IndicTrans2)</option>
+              <option value="mr">Marathi (IndicTrans2)</option>
+              <option value="es">Spanish (M2M-100)</option>
+              <option value="fr">French (M2M-100)</option>
+              <option value="de">German (M2M-100)</option>
+              <option value="zh">Chinese (M2M-100)</option>
+            </select>
+
+            <Button
+              variant="primary"
+              disabled={translateBusy || (txStatus as any)?.translate?.status === "processing"}
+              onClick={async () => {
+                setTranslateBusy(true);
+                try {
+                  const token = localStorage.getItem("token");
+                  if (!token) return;
+                  const res = await fetch(`${API_BASE}/files/${encodeURIComponent(params.id as string)}/translate`, {
+                    method: "POST",
+                    headers: {
+                      "Authorization": `Bearer ${token}`,
+                      "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({ target_lang: targetLang, force: true })
+                  });
+                  if (!res.ok) throw new Error(await res.text());
+                  // Trigger refresh or let SSE handle it
+                } catch (e) {
+                  alert("Translation failed to start: " + e);
+                } finally {
+                  setTranslateBusy(false);
+                }
+              }}
+            >
+              {(txStatus as any)?.translate?.status === "processing" ? "Translating..." : "Start Translation"}
+            </Button>
+
+            {(txStatus as any)?.translate?.status === "completed" && (
+              <Link href={`/files/${params.id}/segments`} className="text-emerald-400 hover:text-emerald-300 text-sm underline">
+                View Segments
+              </Link>
+            )}
+          </div>
+        </div>
+
+        {/* ... (rest of the page: Original/Transformed, File Details, Actions, Speakers) */}
         <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
           <div className="rounded-2xl border border-emerald-500/15 bg-zinc-900/40 p-5">
             <div className="flex items-center gap-2 text-zinc-200 font-semibold">
@@ -459,7 +543,7 @@ export default function FileDetailsPage() {
         <div className="mt-6 rounded-2xl border border-emerald-500/15 bg-zinc-900/40 p-5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 text-zinc-200 font-semibold">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="7" r="4"/><path d="M5.5 21a6.5 6.5 0 0 1 13 0"/></svg>
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="7" r="4" /><path d="M5.5 21a6.5 6.5 0 0 1 13 0" /></svg>
               Speakers
             </div>
             <div className="text-sm text-zinc-400">{speakers.length} found</div>
@@ -479,10 +563,10 @@ export default function FileDetailsPage() {
                     <span className={
                       "text-xs px-2 py-0.5 rounded-full border " +
                       (sp.sample_status === "clone_ready" ? "bg-emerald-500/10 text-emerald-300 border-emerald-500/30" :
-                       sp.sample_status === "ready" ? "bg-blue-500/10 text-blue-300 border-blue-500/30" :
-                       sp.sample_status === "low_quality" ? "bg-amber-500/10 text-amber-300 border-amber-500/30" :
-                       sp.sample_status === "insufficient" ? "bg-red-500/10 text-red-300 border-red-500/30" :
-                       "bg-zinc-700/20 text-zinc-300 border-zinc-700/50")
+                        sp.sample_status === "ready" ? "bg-blue-500/10 text-blue-300 border-blue-500/30" :
+                          sp.sample_status === "low_quality" ? "bg-amber-500/10 text-amber-300 border-amber-500/30" :
+                            sp.sample_status === "insufficient" ? "bg-red-500/10 text-red-300 border-red-500/30" :
+                              "bg-zinc-700/20 text-zinc-300 border-zinc-700/50")
                     }>{sp.sample_status}</span>
                   </div>
                   <div className="mt-3 text-sm text-zinc-400">
@@ -504,7 +588,7 @@ export default function FileDetailsPage() {
                           const url = URL.createObjectURL(blob);
                           const audio = new Audio(url);
                           audio.play();
-                        } catch {}
+                        } catch { }
                       }}
                     >Play sample</Button>
                     <Button
@@ -566,7 +650,7 @@ export default function FileDetailsPage() {
                                     const data = await spRes.json();
                                     if (Array.isArray(data.speakers)) setSpeakers(data.speakers);
                                   }
-                                } catch {}
+                                } catch { }
                                 played = true;
                                 break;
                               }
