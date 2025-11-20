@@ -30,3 +30,23 @@ def enqueue_transcription(file_id: str, language: str | None = None):
         failure_ttl=FAILURE_TTL,
         description=f"Transcribe+Diarize {file_id}",
     )
+
+
+def enqueue_tts_synthesis(file_id: str, speaker_label: str, text: str):
+    """Enqueue a TTS synthesis job that generates a short WAV for the given speaker.
+    The worker implements `workers.chatterbox_tts_synthesize.synthesize_speaker_text(file_id, speaker_label, text)`.
+    Returns the enqueued job.
+    """
+    q = Queue(name=QUEUE_NAME, connection=_get_redis())
+    retry = Retry(max=2, interval=[30, 120])
+    return q.enqueue(
+        "workers.chatterbox_tts_synthesize.synthesize_speaker_text",
+        file_id,
+        speaker_label,
+        text,
+        retry=retry,
+        job_timeout=min(JOB_TIMEOUT, 600),
+        result_ttl=RESULT_TTL,
+        failure_ttl=FAILURE_TTL,
+        description=f"TTS synth {file_id}:{speaker_label}",
+    )

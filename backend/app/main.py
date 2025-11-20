@@ -25,7 +25,8 @@ from .auth import (
     get_current_user,
     is_strong_password,
 )
-from .tasks import enqueue_transcription
+from .tasks import enqueue_transcription, enqueue_tts_synthesis
+from .core.config import MEDIA_ROOT
 
 load_dotenv()
 
@@ -496,3 +497,112 @@ def download_final(file_id: str, user: User = Depends(get_current_user)):
         payload = progress["timeline"]
         headers = {"Content-Disposition": f"attachment; filename=final_{file_id}.json"}
         return JSONResponse(content=payload, headers=headers, media_type="application/json")
+
+
+@app.get("/files/{file_id}/speakers")
+def list_speakers(file_id: str, user: User = Depends(get_current_user)):
+    """Inspect speakers for a given file, including sample/clone readiness.
+    This reads from the 'speakers' table produced by the diarization/alignment workers.
+    """
+    file_id = os.path.basename(file_id)
+    with get_session() as session:
+        # Ownership check via Uploads table
+        up = session.query(Upload).filter(Upload.stored_name == file_id, Upload.user_id == user.id).first()
+        if not up:
+            raise HTTPException(status_code=404, detail="File not found")
+
+        # Query speakers without defining a duplicate ORM model
+        try:
+            rows = session.execute(
+                text(
+                    """
+                    SELECT id, speaker_label, display_name, sample_status, sample_path, sample_quality, clone_state
+                    FROM speakers
+                    WHERE file_id = :fid
+                    ORDER BY speaker_label
+                    """
+                ),
+                {"fid": file_id},
+            ).fetchall()
+        except Exception:
+            raise HTTPException(status_code=404, detail="Speakers not available")
+
+        speakers = []
+        for r in rows:
+            sid, label, display_name, sample_status, sample_path, sample_quality, clone_state = r
+            speakers.append(
+                {
+                    "id": sid,
+                    "speaker_label": label,
+                    "display_name": display_name,
+                    "sample_status": sample_status,
+                    "sample_path": sample_path,
+                    "sample_quality": sample_quality,
+                    "clone_state": clone_state,
+                }
+            )
+        return {"file_id": file_id, "speakers": speakers}
+
+
+@app.get("/files/{file_id}/speakers/{speaker_label}/sample")
+def download_speaker_sample(file_id: str, speaker_label: str, user: User = Depends(get_current_user)):
+    """Stream/download the auto-sampled WAV for a speaker (debugging)."""
+    file_id = os.path.basename(file_id)
+    speaker_label = os.path.basename(speaker_label)
+    with get_session() as session:
+        # Ownership check via Uploads table
+        up = session.query(Upload).filter(Upload.stored_name == file_id, Upload.user_id == user.id).first()
+        if not up:
+            raise HTTPException(status_code=404, detail="File not found")
+        try:
+            row = session.execute(
+                text("SELECT sample_path FROM speakers WHERE file_id = :fid AND speaker_label = :spk"),
+                {"fid": file_id, "spk": speaker_label},
+            ).first()
+        except Exception:
+            row = None
+        if not row or not row[0]:
+            raise HTTPException(status_code=404, detail="Sample not available")
+        rel = row[0]
+        abs_path = (MEDIA_ROOT / rel)
+        if not abs_path.exists():
+            raise HTTPException(status_code=404, detail="Sample not found on disk")
+        return FileResponse(str(abs_path.resolve()), media_type="audio/wav", filename=f"{speaker_label}_auto_sample.wav")
+
+
+@app.post("/files/{file_id}/speakers/{speaker_label}/tts")
+def request_tts(file_id: str, speaker_label: str, text: str = Form("This is a test line."), user: User = Depends(get_current_user)):
+    """Enqueue a short TTS synthesis for a prepared speaker. Returns job id.
+    Use the GET endpoint below to stream the resulting WAV when ready.
+    """
+    file_id = os.path.basename(file_id)
+    speaker_label = os.path.basename(speaker_label)
+    # Ownership check via Uploads table
+    with get_session() as session:
+        up = session.query(Upload).filter(Upload.stored_name == file_id, Upload.user_id == user.id).first()
+        if not up:
+            raise HTTPException(status_code=404, detail="File not found")
+    job = enqueue_tts_synthesis(file_id, speaker_label, text)
+    return {"job_id": job.id}
+
+
+@app.get("/files/{file_id}/speakers/{speaker_label}/tts.wav")
+def stream_tts(file_id: str, speaker_label: str, user: User = Depends(get_current_user)):
+    """Stream the last synthesized TTS test WAV for the given speaker if present."""
+    file_id = os.path.basename(file_id)
+    speaker_label = os.path.basename(speaker_label)
+    with get_session() as session:
+        # Ownership check via Uploads table
+        up = session.query(Upload).filter(Upload.stored_name == file_id, Upload.user_id == user.id).first()
+        if not up:
+            raise HTTPException(status_code=404, detail="File not found")
+    # Prefer new path: {UPLOADS_ROOT}/tts/{file_id}/speakers/{speaker_label}/tts_test.wav
+    candidate_paths = [
+        UPLOADS_ROOT / "tts" / file_id / "speakers" / speaker_label / "tts_test.wav",
+        # Fallback to legacy path
+        UPLOADS_ROOT / file_id / "speakers" / speaker_label / "tts_test.wav",
+    ]
+    out_path = next((p for p in candidate_paths if p.exists()), None)
+    if not out_path:
+        raise HTTPException(status_code=404, detail="TTS not available yet")
+    return FileResponse(str(out_path.resolve()), media_type="audio/wav", filename=f"{speaker_label}_tts_test.wav")
