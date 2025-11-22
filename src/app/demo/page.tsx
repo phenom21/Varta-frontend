@@ -21,7 +21,8 @@ export default function UploadPage() {
   const [status, setStatus] = useState<"idle" | "uploading" | "success" | "error">("idle");
   const [isHover, setIsHover] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [language, setLanguage] = useState<"en" | "hi">("en");
+  const [language, setLanguage] = useState<string>("auto");  // Input video language
+  const [targetLang, setTargetLang] = useState<string>("hi");  // Translation target language
 
   const onDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -62,7 +63,8 @@ export default function UploadPage() {
       setStatus("uploading");
       const fd = new FormData();
       fd.append("file", file);
-      fd.append("language", language);
+      fd.append("language", language);  // Input language
+      fd.append("target_lang", targetLang);  // Target language for translation
       const res = await fetch(`${API_BASE}/upload`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
@@ -146,7 +148,7 @@ export default function UploadPage() {
               {file ? (
                 <span>
                   <span className="font-medium text-white">{file.name}</span>
-                  <span className="ml-2 text-zinc-500">{(file.size/1024/1024).toFixed(2)} MB</span>
+                  <span className="ml-2 text-zinc-500">{(file.size / 1024 / 1024).toFixed(2)} MB</span>
                 </span>
               ) : (
                 <span className="text-zinc-500">No file selected</span>
@@ -154,14 +156,37 @@ export default function UploadPage() {
             </div>
             <div className="flex items-center gap-3">
               <label className="text-sm text-zinc-300 flex items-center gap-2">
-                <span>Language</span>
+                <span>Input:</span>
                 <select
                   value={language}
-                  onChange={(e) => setLanguage(e.target.value as "en" | "hi")}
-                  className="bg-black border border-zinc-700 rounded-md px-2 py-1 text-white"
+                  onChange={(e) => setLanguage(e.target.value)}
+                  className="bg-black border border-zinc-700 rounded-md px-2 py-1 text-white text-sm"
                 >
                   <option value="en">English</option>
                   <option value="hi">Hindi</option>
+                  <option value="es">Spanish</option>
+                  <option value="fr">French</option>
+                  <option value="de">German</option>
+                  <option value="zh">Chinese</option>
+                </select>
+              </label>
+
+              <label className="text-sm text-zinc-300 flex items-center gap-2">
+                <span>Translate to:</span>
+                <select
+                  value={targetLang}
+                  onChange={(e) => setTargetLang(e.target.value)}
+                  className="bg-black border border-zinc-700 rounded-md px-2 py-1 text-white text-sm"
+                >
+                  <option value="hi">Hindi</option>
+                  <option value="bn">Bengali</option>
+                  <option value="ta">Tamil</option>
+                  <option value="te">Telugu</option>
+                  <option value="mr">Marathi</option>
+                  <option value="es">Spanish</option>
+                  <option value="fr">French</option>
+                  <option value="de">German</option>
+                  <option value="zh">Chinese</option>
                 </select>
               </label>
               {status === "uploading" && (

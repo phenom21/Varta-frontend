@@ -12,8 +12,9 @@ type FileDetails = {
   size?: number;
   uploaded_at?: string;
   kind?: "video" | "image" | "file";
-  status?: "completed" | "processing" | "failed";
+  status?: string;
   duration?: string;
+  progress?: any;
 };
 
 function formatBytes(bytes?: number) {
@@ -72,6 +73,13 @@ export default function FileDetailsPage() {
   const [ttsText, setTtsText] = useState<Record<string, string>>({});
   const [translateBusy, setTranslateBusy] = useState(false);
   const [targetLang, setTargetLang] = useState("hi");
+  const [ttsGenerating, setTtsGenerating] = useState(false);
+  const [ttsProgress, setTtsProgress] = useState<{
+    total_segments?: number;
+    done?: number;
+    errors?: number;
+    status?: string;
+  } | null>(null);
 
   useEffect(() => {
     const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
@@ -105,6 +113,7 @@ export default function FileDetailsPage() {
           kind: data.kind,
           status: data.status || "completed",
           duration: data.duration,
+          progress: data.progress,
         });
 
         // Fetch preview blob securely with Authorization and create an object URL
@@ -130,8 +139,9 @@ export default function FileDetailsPage() {
     }
     load();
 
-    // No polling here; SSE-driven refresh is handled below
-    return () => { };
+    // Poll for file status updates (translation, TTS, etc.)
+    const pollInterval = setInterval(load, 3000);
+    return () => clearInterval(pollInterval);
   }, [params.id, router]);
 
   // Refetch speakers when status/progress changes via SSE
@@ -369,18 +379,34 @@ export default function FileDetailsPage() {
               Translation
             </div>
             <div className="text-sm text-zinc-400">
-              {(txStatus as any)?.translate?.status ? (
-                <span className="capitalize">{(txStatus as any).translate.status}</span>
+              {details?.status === 'translating' ? (
+                <span className="text-blue-400">Processing</span>
+              ) : details?.status === 'translated' ? (
+                <span className="text-emerald-400">Complete</span>
+              ) : (details?.progress as any)?.translate?.translated_segments > 0 ? (
+                <span className="text-yellow-400">Partial</span>
               ) : "Not started"}
             </div>
           </div>
 
-          {(txStatus as any)?.translate?.status === "processing" && (
-            <div className="mt-4 h-2 w-full rounded bg-zinc-800 overflow-hidden">
-              <div
-                className="h-full bg-blue-500 transition-all animate-pulse"
-                style={{ width: `${Math.min(100, Math.max(5, ((txStatus as any).translate.translated_segments / (txStatus as any).translate.total_segments) * 100))}%` }}
-              />
+          {(details?.status === 'translating' || (details?.progress as any)?.translate?.status === 'processing') && (
+            <div className="mt-4">
+              <div className="h-2 w-full rounded bg-zinc-800 overflow-hidden">
+                <div
+                  className="h-full bg-blue-500 transition-all"
+                  style={{
+                    width: `${Math.min(100, Math.max(5,
+                      ((details?.progress as any)?.translate?.translated_segments || 0) /
+                      Math.max(1, (details?.progress as any)?.translate?.total_segments || 1) * 100
+                    ))}%`
+                  }}
+                />
+              </div>
+              {(details?.progress as any)?.translate?.total_segments > 0 && (
+                <div className="mt-2 text-xs text-zinc-500">
+                  {(details?.progress as any).translate.translated_segments || 0} / {(details?.progress as any).translate.total_segments} segments
+                </div>
+              )}
             </div>
           )}
 
@@ -389,7 +415,7 @@ export default function FileDetailsPage() {
               className="bg-zinc-950 border border-zinc-800 text-white rounded px-3 py-2 text-sm focus:outline-none focus:border-emerald-500"
               value={targetLang}
               onChange={(e) => setTargetLang(e.target.value)}
-              disabled={translateBusy || (txStatus as any)?.translate?.status === "processing"}
+              disabled={translateBusy || details?.status === 'translating'}
             >
               <option value="hi">Hindi (IndicTrans2)</option>
               <option value="bn">Bengali (IndicTrans2)</option>
@@ -404,12 +430,15 @@ export default function FileDetailsPage() {
 
             <Button
               variant="primary"
-              disabled={translateBusy || (txStatus as any)?.translate?.status === "processing"}
+              disabled={translateBusy || details?.status === 'translating'}
               onClick={async () => {
                 setTranslateBusy(true);
                 try {
                   const token = localStorage.getItem("token");
                   if (!token) return;
+                  // Optimistically update status
+                  setDetails(prev => prev ? ({ ...prev, status: 'translating' }) : null);
+
                   const res = await fetch(`${API_BASE}/files/${encodeURIComponent(params.id as string)}/translate`, {
                     method: "POST",
                     headers: {
@@ -419,7 +448,6 @@ export default function FileDetailsPage() {
                     body: JSON.stringify({ target_lang: targetLang, force: true })
                   });
                   if (!res.ok) throw new Error(await res.text());
-                  // Trigger refresh or let SSE handle it
                 } catch (e) {
                   alert("Translation failed to start: " + e);
                 } finally {
@@ -427,16 +455,139 @@ export default function FileDetailsPage() {
                 }
               }}
             >
-              {(txStatus as any)?.translate?.status === "processing" ? "Translating..." : "Start Translation"}
+              {details?.status === 'translating' ? "Translating..." : "Start Translation"}
             </Button>
 
-            {(txStatus as any)?.translate?.status === "completed" && (
+            {details?.status === 'translated' && (
               <Link href={`/files/${params.id}/segments`} className="text-emerald-400 hover:text-emerald-300 text-sm underline">
                 View Segments
               </Link>
             )}
           </div>
         </div>
+
+        {/* TTS Generation Section */}
+        {(txStatus?.status === "translated" || txStatus?.status === "tts" || txStatus?.status === "tts_done" || txStatus?.status === "tts_partial" || txStatus?.status === "voices_clone_ready" || txStatus?.status === "diarized" || txStatus?.status === "transcribed") && (
+          <div className="mt-6 rounded-2xl border border-emerald-500/15 bg-zinc-900/40 p-5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-zinc-200 font-semibold">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" /></svg>
+                Text-to-Speech Generation
+              </div>
+              <div className="text-sm text-zinc-400">
+                {txStatus?.status === "tts" ? (
+                  <span className="text-blue-400">Processing...</span>
+                ) : txStatus?.status === "tts_done" ? (
+                  <span className="text-emerald-400">✓ Complete</span>
+                ) : txStatus?.status === "tts_partial" ? (
+                  <span className="text-amber-400">Partial</span>
+                ) : (
+                  "Ready"
+                )}
+              </div>
+            </div>
+
+            {ttsProgress && (
+              <div className="mt-4">
+                <div className="flex items-center justify-between text-sm mb-2">
+                  <span className="text-zinc-400">
+                    Progress: {ttsProgress.done || 0} / {ttsProgress.total_segments || 0} segments
+                  </span>
+                  {(ttsProgress.errors || 0) > 0 && (
+                    <span className="text-red-400">
+                      {ttsProgress.errors} errors
+                    </span>
+                  )}
+                </div>
+                <div className="h-2 w-full rounded bg-zinc-800 overflow-hidden">
+                  <div
+                    className="h-full bg-emerald-500 transition-all"
+                    style={{
+                      width: `${Math.min(100, Math.max(0, ((ttsProgress.done || 0) / (ttsProgress.total_segments || 1)) * 100))}%`
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="mt-4 flex items-center gap-4">
+              <Button
+                variant="primary"
+                disabled={
+                  ttsGenerating ||
+                  txStatus?.status === "tts" ||
+                  !(details?.status === "ready_for_tts" || details?.status === "translated")
+                }
+                onClick={async () => {
+                  setTtsGenerating(true);
+                  try {
+                    const token = localStorage.getItem("token");
+                    if (!token) return;
+
+                    const res = await fetch(`${API_BASE}/files/${encodeURIComponent(params.id as string)}/tts`, {
+                      method: "POST",
+                      headers: {
+                        "Authorization": `Bearer ${token}`,
+                      },
+                    });
+
+                    if (!res.ok) throw new Error(await res.text());
+
+                    const data = await res.json();
+                    console.log("TTS job enqueued:", data);
+
+                    // Start polling for status
+                    const pollInterval = setInterval(async () => {
+                      try {
+                        const statusRes = await fetch(
+                          `${API_BASE}/files/${encodeURIComponent(params.id as string)}/tts/status`,
+                          { headers: { Authorization: `Bearer ${token}` } }
+                        );
+
+                        if (statusRes.ok) {
+                          const statusData = await statusRes.json();
+                          setTtsProgress(statusData.tts_progress || null);
+
+                          if (statusData.status === "tts_done" || statusData.status === "tts_partial") {
+                            clearInterval(pollInterval);
+                            setTtsGenerating(false);
+                          }
+                        }
+                      } catch (err) {
+                        console.error("TTS status poll error:", err);
+                      }
+                    }, 3000);
+
+                    // Clear interval after 2 hours
+                    setTimeout(() => clearInterval(pollInterval), 2 * 60 * 60 * 1000);
+
+                  } catch (e) {
+                    alert("TTS generation failed to start: " + e);
+                    setTtsGenerating(false);
+                  }
+                }}
+              >
+                {ttsGenerating || txStatus?.status === "tts"
+                  ? "⏳ Generating Speech..."
+                  : txStatus?.status === "tts_done"
+                    ? "🔄 Regenerate Speech"
+                    : "🎤 Generate Speech Audio"}
+              </Button>
+
+              {txStatus?.status === "tts_done" && (
+                <div className="text-sm text-emerald-400">
+                  ✓ Audio files ready for stitching
+                </div>
+              )}
+            </div>
+
+            {txStatus?.status === "tts_partial" && (
+              <div className="mt-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-sm text-amber-300">
+                ⚠️ Some segments failed to generate. Check logs for details.
+              </div>
+            )}
+          </div>
+        )}
 
         {/* ... (rest of the page: Original/Transformed, File Details, Actions, Speakers) */}
         <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">

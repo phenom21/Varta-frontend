@@ -25,7 +25,7 @@ from .auth import (
     get_current_user,
     is_strong_password,
 )
-from .tasks import enqueue_transcription, enqueue_tts_synthesis, enqueue_translation
+from .tasks import enqueue_transcription, enqueue_tts_synthesis, enqueue_translation, enqueue_per_segment_tts
 from pydantic import BaseModel
 from .core.config import MEDIA_ROOT
 
@@ -116,6 +116,7 @@ def sanitize_filename(name: str) -> str:
 async def upload(
     file: UploadFile = File(...),
     language: str | None = Form(None),
+    target_lang: str | None = Form(None),  # Target language for auto-translation
     user: User = Depends(get_current_user),
 ):
     safe_name = sanitize_filename(file.filename)
@@ -176,7 +177,20 @@ async def upload(
             tr.language_code = language
         session.commit()
 
-    # Enqueue background job
+        # Store target_lang in File.progress for auto-translation
+        print(f"[Upload] Received target_lang: {target_lang}")
+        f = session.get(FileModel, dest_name)
+        if not f:
+            f = FileModel(id=dest_name, status="uploaded", progress={})
+            session.add(f)
+        if not f.progress:
+            f.progress = {}
+        if isinstance(f.progress, dict) and target_lang:
+            f.progress["auto_translate"] = {"target_lang": target_lang}
+            print(f"[Upload] Stored auto_translate in File.progress: {f.progress}")
+        session.commit()
+
+    # Enqueue transcription job
     try:
         enqueue_transcription(dest_name, language)
     except Exception as e:
@@ -220,14 +234,20 @@ def get_file_details(file_id: str, user: User = Depends(get_current_user)):
         original = row.original_name
         ext = original.rsplit(".", 1)[-1].lower() if "." in original else ""
         kind = "video" if ext in {"mp4","mov","avi","mkv","webm","m4v","wmv","flv"} else ("image" if ext in {"png","jpg","jpeg","gif","webp","bmp","tiff","svg"} else "file")
+        # Also fetch status from File table (tracks translation/TTS status)
+        file_row = session.get(FileModel, os.path.basename(file_id))
+        file_status = file_row.status if file_row else row.status
+        file_progress = file_row.progress if file_row else None
+        
         return {
             "id": row.stored_name,
             "name": original,
             "size": row.size,
             "uploaded_at": row.created_at.isoformat() if getattr(row, "created_at", None) else None,
-            "status": row.status,
+            "status": file_status,  # Use File table status (translation/TTS aware)
             "duration": row.duration,
             "kind": kind,
+            "progress": file_progress,  # Include progress data
         }
 
 
@@ -637,7 +657,8 @@ def request_translation(file_id: str, payload: TranslateRequest, user: User = De
         if not f.progress:
             f.progress = {}
         if isinstance(f.progress, dict):
-            f.progress["translate"] = {"status": "queued", "target_lang": payload.target_lang}
+            # Mark translation as processing so the UI can show a spinner immediately
+            f.progress["translate"] = {"status": "processing", "target_lang": payload.target_lang}
         session.add(f)
         session.commit()
 
@@ -684,7 +705,120 @@ def update_segment(segment_id: int, payload: UpdateSegmentRequest, user: User = 
             raise HTTPException(status_code=403, detail="Not authorized")
 
         seg.translated_text = payload.translated_text
-        # TODO: Invalidate TTS if exists (Day 6)
+        # Invalidate TTS cache if exists
+        if seg.tts_cache_key:
+            seg.tts_status = "pending"
+            seg.tts_path = None
+            seg.tts_cache_key = None
         session.add(seg)
         session.commit()
         return {"id": seg.id, "translated_text": seg.translated_text}
+
+
+@app.post("/files/{file_id}/tts")
+def request_per_segment_tts(file_id: str, force: bool = False, user: User = Depends(get_current_user)):
+    """Enqueue per-segment TTS generation for all translated segments in a file."""
+    file_id = os.path.basename(file_id)
+    with get_session() as session:
+        # Check ownership
+        up = session.query(Upload).filter(Upload.stored_name == file_id, Upload.user_id == user.id).first()
+        if not up:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        # Check file status
+        f = session.get(FileModel, file_id)
+        if not f or f.status not in {"ready_for_tts", "translated", "tts_done", "tts_partial", "tts", "error"}:
+            raise HTTPException(status_code=400, detail="File must be translated before TTS generation")
+        
+        # Update status
+        f.status = "tts"
+        session.commit()
+    
+    job = enqueue_per_segment_tts(file_id, force)
+    return {"file_id": file_id, "job_id": job.id, "status": "queued"}
+
+
+@app.get("/files/{file_id}/tts/status")
+def get_tts_status(file_id: str, user: User = Depends(get_current_user)):
+    """Get TTS generation progress for a file."""
+    file_id = os.path.basename(file_id)
+    with get_session() as session:
+        # Check ownership
+        up = session.query(Upload).filter(Upload.stored_name == file_id, Upload.user_id == user.id).first()
+        if not up:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        # Get file progress
+        f = session.get(FileModel, file_id)
+        if not f:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        # Count segments by status
+        from sqlalchemy import func
+        status_counts = session.query(
+            Segment.tts_status,
+            func.count(Segment.id)
+        ).filter(Segment.file_id == file_id).group_by(Segment.tts_status).all()
+        
+        status_map = {status: count for status, count in status_counts}
+        
+        tts_progress = f.progress.get("tts", {}) if isinstance(f.progress, dict) else {}
+        
+        return {
+            "file_id": file_id,
+            "status": f.status,
+            "tts_progress": tts_progress,
+            "segment_counts": status_map,
+            "total_segments": sum(status_map.values()),
+        }
+
+
+@app.post("/segments/{segment_id}/invalidate-tts-cache")
+def invalidate_segment_tts_cache(segment_id: int, user: User = Depends(get_current_user)):
+    """Invalidate TTS cache for a specific segment."""
+    with get_session() as session:
+        seg = session.get(Segment, segment_id)
+        if not seg:
+            raise HTTPException(status_code=404, detail="Segment not found")
+        
+        # Verify ownership
+        up = session.query(Upload).filter(Upload.stored_name == seg.file_id, Upload.user_id == user.id).first()
+        if not up:
+            raise HTTPException(status_code=403, detail="Not authorized")
+        
+        # Invalidate cache
+        seg.tts_status = "pending"
+        seg.tts_path = None
+        seg.tts_cache_key = None
+        seg.tts_error_reason = None
+        session.add(seg)
+        session.commit()
+        
+        return {"id": seg.id, "status": "cache_invalidated"}
+
+
+@app.post("/segments/{segment_id}/regenerate-tts")
+def regenerate_segment_tts(segment_id: int, user: User = Depends(get_current_user)):
+    """Regenerate TTS for a specific segment (invalidates cache and enqueues job)."""
+    with get_session() as session:
+        seg = session.get(Segment, segment_id)
+        if not seg:
+            raise HTTPException(status_code=404, detail="Segment not found")
+        
+        # Verify ownership
+        up = session.query(Upload).filter(Upload.stored_name == seg.file_id, Upload.user_id == user.id).first()
+        if not up:
+            raise HTTPException(status_code=403, detail="Not authorized")
+        
+        # Invalidate cache
+        seg.tts_status = "queued"
+        seg.tts_path = None
+        seg.tts_cache_key = None
+        seg.tts_error_reason = None
+        session.add(seg)
+        session.commit()
+    
+    # Enqueue job for entire file (will process only pending segments)
+    job = enqueue_per_segment_tts(seg.file_id, force=False)
+    
+    return {"id": seg.id, "file_id": seg.file_id, "job_id": job.id, "status": "queued"}

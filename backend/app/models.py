@@ -86,5 +86,13 @@ class Segment(Base):
     word_timestamps: Mapped[dict | list | None] = mapped_column(JSON, nullable=True)
     overlap: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    
+    # TTS fields
+    tts_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    tts_status: Mapped[str] = mapped_column(String, default="pending", nullable=False)
+    tts_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tts_provider_meta: Mapped[dict | list | None] = mapped_column(JSON, nullable=True)
+    tts_error_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    tts_cache_key: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
 
     file: Mapped[File] = relationship("File", back_populates="segments")

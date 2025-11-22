@@ -53,19 +53,29 @@ def enqueue_tts_synthesis(file_id: str, speaker_label: str, text: str):
 
 
 def enqueue_translation(file_id: str, target_lang: str, force: bool = False):
-    """Enqueue a translation job.
-    The worker implements `workers.translate.translate_job(file_id, target_lang, force)`.
-    """
-    q = Queue(name=QUEUE_NAME, connection=_get_redis())
-    retry = Retry(max=3, interval=[60, 300, 600])
-    return q.enqueue(
+    """Enqueue a translation job for the given file."""
+    redis_conn = Redis.from_url(os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0"))
+    queue = Queue("transcriptions", connection=redis_conn)
+    job = queue.enqueue(
         "workers.translate.translate_job",
         file_id,
         target_lang,
         force,
-        retry=retry,
-        job_timeout=JOB_TIMEOUT,
-        result_ttl=RESULT_TTL,
-        failure_ttl=FAILURE_TTL,
-        description=f"Translate {file_id} to {target_lang}",
+        job_timeout="1h",
+        result_ttl=1800,
     )
+    return job
+
+
+def enqueue_per_segment_tts(file_id: str, force: bool = False):
+    """Enqueue per-segment TTS generation job."""
+    redis_conn = Redis.from_url(os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0"))
+    queue = Queue("tts", connection=redis_conn)
+    job = queue.enqueue(
+        "workers.per_segment_tts.per_segment_tts_job",
+        file_id,
+        force,
+        job_timeout="2h",
+        result_ttl=1800,
+    )
+    return job
