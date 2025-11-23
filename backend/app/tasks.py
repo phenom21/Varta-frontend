@@ -58,11 +58,11 @@ def enqueue_translation(file_id: str, target_lang: str, force: bool = False):
     queue = Queue("transcriptions", connection=redis_conn)
     job = queue.enqueue(
         "workers.translate.translate_job",
-        file_id,
-        target_lang,
-        force,
-        job_timeout="1h",
-        result_ttl=1800,
+        file_id=file_id,
+        target_lang=target_lang,
+        force=force,
+        job_timeout=1200,  # 20 minutes for slow CPU translation
+        result_ttl=86400
     )
     return job
 

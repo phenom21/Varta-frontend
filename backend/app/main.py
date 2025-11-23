@@ -896,3 +896,82 @@ def serve_media(file_path: str):
         raise HTTPException(status_code=404, detail="File not found")
     
     return FileResponse(str(full_path))
+
+# SSE endpoint for real-time file status updates
+from fastapi.responses import StreamingResponse
+import asyncio
+import json
+
+@app.get("/files/{file_id}/stream")
+async def stream_file_status(file_id: str, token: str = None):
+    """Stream file status updates via Server-Sent Events."""
+    # Validate token from query parameter (EventSource doesn't support headers)
+    if not token:
+        return JSONResponse(
+            status_code=401,
+            content={"error": "No token provided"}
+        )
+    
+    try:
+        # Validate token using same method as auth module
+        from jose import jwt, JWTError
+        from .auth import SECRET_KEY, ALGORITHM
+        
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+        if not user_id:
+            return JSONResponse(
+                status_code=401,
+                content={"error": "Invalid token"}
+            )
+    except JWTError:
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Authentication failed"}
+        )
+    except Exception as e:
+        return JSONResponse(
+            status_code=401,
+            content={"error": f"Authentication error: {str(e)}"}
+        )
+    
+    async def event_generator():
+        last_status = None
+        last_progress = None
+        
+        while True:
+            try:
+                with get_session() as session:
+                    file_row = session.execute(
+                        text("SELECT status, progress FROM files WHERE id = :fid"),
+                        {"fid": file_id}
+                    ).first()
+                    
+                    if not file_row:
+                        yield f"data: {json.dumps({'error': 'File not found'})}\n\n"
+                        break
+                    
+                    # Only send update if status or progress changed
+                    current_status = file_row.status
+                    current_progress = file_row.progress
+                    
+                    if current_status != last_status or current_progress != last_progress:
+                        data = {
+                            "status": current_status,
+                            "progress": current_progress
+                        }
+                        yield f"data: {json.dumps(data)}\n\n"
+                        last_status = current_status
+                        last_progress = current_progress
+                    
+                    # Stop streaming if file is in terminal state
+                    if current_status in {"done", "error"}:
+                        break
+                
+                await asyncio.sleep(1)  # Poll every second
+                
+            except Exception as e:
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                break
+    
+    return StreamingResponse(event_generator(), media_type="text/event-stream")

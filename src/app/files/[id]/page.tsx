@@ -140,11 +140,52 @@ export default function FileDetailsPage() {
       }
     }
     load();
-
-    // Poll for file status updates (translation, TTS, etc.)
-    const pollInterval = setInterval(load, 3000);
-    return () => clearInterval(pollInterval);
+    fetchSpeakersOnce();
   }, [params.id, router]);
+
+  // SSE for real-time status updates (replaces polling)
+  useEffect(() => {
+    const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+    if (!token || !details) return;
+
+    const eventSource = new EventSource(
+      `${API_BASE}/files/${encodeURIComponent(params.id as string)}/stream?token=${encodeURIComponent(token)}`
+    );
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.error) {
+          console.error("SSE error:", data.error);
+          eventSource.close();
+          return;
+        }
+
+        // Update details with new status and progress
+        setDetails(prev => prev ? {
+          ...prev,
+          status: data.status,
+          progress: data.progress
+        } : null);
+
+        // Close connection if in terminal state
+        if (data.status === "done" || data.status === "error") {
+          eventSource.close();
+        }
+      } catch (err) {
+        console.error("Failed to parse SSE data:", err);
+      }
+    };
+
+    eventSource.onerror = (error) => {
+      console.error("SSE connection error:", error);
+      eventSource.close();
+    };
+
+    return () => {
+      eventSource.close();
+    };
+  }, [params.id, details?.id]);
 
   // Refetch speakers when status/progress changes via SSE
   useEffect(() => {
