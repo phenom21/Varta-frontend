@@ -79,3 +79,17 @@ def enqueue_per_segment_tts(file_id: str, force: bool = False):
         result_ttl=1800,
     )
     return job
+
+
+def enqueue_stitch(file_id: str, force: bool = False):
+    """Enqueue audio/video stitching job (Day 7)."""
+    redis_conn = Redis.from_url(os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0"))
+    queue = Queue("tts", connection=redis_conn)  # Use tts queue for now
+    job = queue.enqueue(
+        "workers.stitch_audio.stitch_dubbed_audio",
+        file_id,
+        force,
+        job_timeout="1h",
+        result_ttl=1800,
+    )
+    return job

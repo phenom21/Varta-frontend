@@ -74,6 +74,8 @@ export default function FileDetailsPage() {
   const [translateBusy, setTranslateBusy] = useState(false);
   const [targetLang, setTargetLang] = useState("hi");
   const [ttsGenerating, setTtsGenerating] = useState(false);
+  const [stitching, setStitching] = useState(false);
+  const [outputs, setOutputs] = useState<any>(null);
   const [ttsProgress, setTtsProgress] = useState<{
     total_segments?: number;
     done?: number;
@@ -574,9 +576,99 @@ export default function FileDetailsPage() {
                     : "🎤 Generate Speech Audio"}
               </Button>
 
-              {txStatus?.status === "tts_done" && (
+              {/* Day 7: Generate Final Video Button */}
+              {(txStatus?.status === "tts_done" || details?.status === "tts_done" || details?.status === "done") && (
+                <Button
+                  variant="primary"
+                  disabled={stitching || details?.status === "stitching"}
+                  onClick={async () => {
+                    setStitching(true);
+                    try {
+                      const token = localStorage.getItem("token");
+                      if (!token) return;
+
+                      const res = await fetch(`${API_BASE}/files/${encodeURIComponent(params.id as string)}/stitch?force=true`, {
+                        method: "POST",
+                        headers: {
+                          "Authorization": `Bearer ${token}`,
+                        },
+                      });
+
+                      if (!res.ok) throw new Error(await res.text());
+
+                      const data = await res.json();
+                      console.log("Stitch job enqueued:", data);
+
+                      // Poll for outputs
+                      const pollInterval = setInterval(async () => {
+                        try {
+                          const outputsRes = await fetch(
+                            `${API_BASE}/files/${encodeURIComponent(params.id as string)}/outputs`,
+                            { headers: { Authorization: `Bearer ${token}` } }
+                          );
+
+                          if (outputsRes.ok) {
+                            const outputsData = await outputsRes.json();
+                            setOutputs(outputsData);
+
+                            if (outputsData.status === "done") {
+                              clearInterval(pollInterval);
+                              setStitching(false);
+                            } else if (outputsData.status === "error") {
+                              clearInterval(pollInterval);
+                              setStitching(false);
+                            }
+                          }
+                        } catch (err) {
+                          console.error("Failed to fetch outputs:", err);
+                        }
+                      }, 2000);
+
+                      // Stop polling after 5 minutes
+                      setTimeout(() => {
+                        clearInterval(pollInterval);
+                        setStitching(false);
+                      }, 300000);
+
+                    } catch (err) {
+                      console.error("Failed to trigger stitching:", err);
+                      setStitching(false);
+                    }
+                  }}
+                >
+                  {stitching || details?.status === "stitching"
+                    ? "⏳ Generating Final Video..."
+                    : details?.status === "done"
+                      ? "🔄 Regenerate Final Video"
+                      : "🎬 Generate Final Video"}
+                </Button>
+              )}
+
+              {txStatus?.status === "tts_done" && !outputs && (
                 <div className="text-sm text-emerald-400">
                   ✓ Audio files ready for stitching
+                </div>
+              )}
+
+              {/* Show download links when done */}
+              {outputs?.final_audio_url && (
+                <div className="flex flex-col gap-2">
+                  <a
+                    href={outputs.final_audio_url}
+                    download
+                    className="text-sm text-emerald-400 hover:text-emerald-300 underline"
+                  >
+                    ⬇️ Download Final Audio
+                  </a>
+                  {outputs.final_video_url && (
+                    <a
+                      href={outputs.final_video_url}
+                      download
+                      className="text-sm text-emerald-400 hover:text-emerald-300 underline"
+                    >
+                      ⬇️ Download Final Video
+                    </a>
+                  )}
                 </div>
               )}
             </div>

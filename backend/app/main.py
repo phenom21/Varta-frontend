@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, status
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select, text
 from dotenv import load_dotenv
@@ -25,7 +26,7 @@ from .auth import (
     get_current_user,
     is_strong_password,
 )
-from .tasks import enqueue_transcription, enqueue_tts_synthesis, enqueue_translation, enqueue_per_segment_tts
+from .tasks import enqueue_transcription, enqueue_tts_synthesis, enqueue_translation, enqueue_per_segment_tts, enqueue_stitch
 from pydantic import BaseModel
 from .core.config import MEDIA_ROOT
 
@@ -822,3 +823,76 @@ def regenerate_segment_tts(segment_id: int, user: User = Depends(get_current_use
     job = enqueue_per_segment_tts(seg.file_id, force=False)
     
     return {"id": seg.id, "file_id": seg.file_id, "job_id": job.id, "status": "queued"}
+
+# Day 7: Audio/Video Stitching Endpoints
+
+@app.post("/files/{file_id}/stitch")
+def request_stitch(
+    file_id: str,
+    force: bool = False,
+    user: User = Depends(get_current_user)
+):
+    """Trigger audio/video stitching for a file (Day 7)."""
+    with get_session() as session:
+        file_row = session.execute(
+            text("SELECT id, status FROM files WHERE id = :fid"),
+            {"fid": file_id}
+        ).first()
+        
+        if not file_row:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        if file_row.status not in {"tts_done", "done", "error"} and not force:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File must have status 'tts_done' (current: {file_row.status})"
+            )
+        
+        job = enqueue_stitch(file_id, force=force)
+        return {"file_id": file_id, "job_id": job.id, "status": "queued"}
+
+
+@app.get("/files/{file_id}/outputs")
+def get_file_outputs(file_id: str, user: User = Depends(get_current_user)):
+    """Get final output URLs for a file (Day 7)."""
+    with get_session() as session:
+        file_row = session.execute(
+            text("SELECT status, progress, final_audio_path, final_video_path, media_type FROM files WHERE id = :fid"),
+            {"fid": file_id}
+        ).first()
+        
+        if not file_row:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        files_url_base = os.getenv("FILES_URL_BASE", "http://localhost:8000/media")
+        
+        return {
+            "file_id": file_id,
+            "status": file_row.status,
+            "media_type": file_row.media_type,
+            "final_audio_url": f"{files_url_base}/{file_row.final_audio_path}" if file_row.final_audio_path else None,
+            "final_video_url": f"{files_url_base}/{file_row.final_video_path}" if file_row.final_video_path else None,
+            "progress": file_row.progress
+        }
+
+# Day 7: Serve media files via custom route (replaces StaticFiles mount)
+@app.get("/media/{file_path:path}")
+@app.head("/media/{file_path:path}")
+def serve_media(file_path: str):
+    """Serve final audio/video outputs from /project/files directory."""
+    FILES_ROOT_MEDIA = Path(os.getenv("FILES_ROOT", "/project/files"))
+    full_path = FILES_ROOT_MEDIA / file_path
+    
+    # Security: prevent directory traversal
+    try:
+        full_path = full_path.resolve()
+        FILES_ROOT_MEDIA = FILES_ROOT_MEDIA.resolve()
+        if not str(full_path).startswith(str(FILES_ROOT_MEDIA)):
+            raise HTTPException(status_code=403, detail="Access denied")
+    except Exception:
+        raise HTTPException(status_code=403, detail="Invalid path")
+    
+    if not full_path.exists() or not full_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    return FileResponse(str(full_path))
