@@ -67,6 +67,20 @@ def enqueue_translation(file_id: str, target_lang: str, force: bool = False):
     return job
 
 
+def enqueue_text_shortening(file_id: str, force: bool = False):
+    """Enqueue text shortening job (runs after translation, before TTS)."""
+    redis_conn = Redis.from_url(os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0"))
+    queue = Queue("transcriptions", connection=redis_conn, default_timeout=600)
+    job = queue.enqueue(
+        "workers.shorten_text.shorten_text_job",
+        file_id,
+        force,
+        job_timeout=600,  # 10 minutes
+        result_ttl=1800
+    )
+    return job
+
+
 def enqueue_per_segment_tts(file_id: str, force: bool = False):
     """Enqueue per-segment TTS generation job."""
     redis_conn = Redis.from_url(os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0"))
